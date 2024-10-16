@@ -1,0 +1,2430 @@
+---
+title: "Illumina vs AVITI"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    toc_depth: 6
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Custom Functions
+
+```{r}
+suppressMessages(suppressWarnings({
+  library(data.table)
+  library(dplyr)
+  library(tibble)
+  library(ggplot2)
+  library(phyloseq)
+  library(MicrobiotaProcess)
+  library(ggpubr)
+  library(ALDEx2)
+  library(ggrepel)
+  library(ggplotify)
+  library(radEmu)
+  library(vegan)
+  library(reshape2)
+  library(pheatmap)
+  library(mgcv)
+  library(robustlmm)
+  library(lmerTest)
+  library(emmeans)
+  library(magrittr)
+  library(openxlsx)
+  library(caret)
+  library(MicrobiomeStat)
+  library(glmnet)
+  library(pROC)
+  library(purrr)
+  library(umap)
+  library(Maaslin2)
+  library(ggvenn)
+}))
+```
+
+```{r}
+source("custom_functions.R")
+```
+
+
+# Non-decontaminated
+
+## Data import
+
+Importing ASV, taxa and metadata tables for both ILLUMINA and AVITI datasets
+
+### ILLUMINA
+
+```{r}
+asv_tab_illumina <- as.data.frame(fread("illumina/dada_results/asv_table.csv",check.names = FALSE))
+taxa_tab_illumina <- as.data.frame(fread("illumina/dada_results/taxa_table.csv",check.names = FALSE))
+
+asv_tab_illumina <- asv_tab_illumina[c(TRUE,colSums(asv_tab_illumina[,-1])>10000)]
+asv_tab_illumina <- asv_tab_illumina[(nchar(asv_tab_illumina$SeqID) > 100),]
+
+```
+
+
+### AVITI
+
+```{r}
+asv_tab_aviti <- as.data.frame(fread("aviti/dada_results/asv_table.csv",check.names = FALSE))
+taxa_tab_aviti <- as.data.frame(fread("aviti/dada_results/taxa_table.csv",check.names = FALSE))
+
+asv_tab_aviti <- asv_tab_aviti[c(TRUE,colSums(asv_tab_aviti[,-1])>80000)]
+asv_tab_aviti <- asv_tab_aviti[(nchar(asv_tab_aviti$SeqID) > 100),]
+```
+
+### Merging
+
+```{r}
+asv_tab <- merge(asv_tab_illumina,asv_tab_aviti,by="SeqID",all=TRUE)
+taxa_tab <- merging_taxa_tables(taxa_tab_illumina,taxa_tab_aviti)
+data_checked <- data_check(asv_tab,taxa_tab)
+asv_tab <- data_checked[[1]]
+taxa_tab <- data_checked[[2]]
+
+colnames(taxa_tab) <- c("SeqID","Domain","Phylum","Class","Order",
+                        "Family","Genus","Species")
+```
+
+### Metadata
+
+```{r}
+metadata <- data.frame("SampleID"=colnames(asv_tab)[-1])
+metadata$Platform <- ifelse(grepl("run06_",metadata$SampleID),"ILLUMINA","AVITI")
+metadata$Sample <- metadata$SampleID
+metadata$Pair <- ifelse(grepl("run06_",metadata$SampleID),
+                        gsub("run06_","",metadata$SampleID),
+                        gsub("CAH_","",metadata$SampleID))
+
+head(metadata)
+```
+
+## Composition
+
+### Nonrarefied 
+
+```{r}
+ps <- (construct_phyloseq(asv_tab,taxa_tab,metadata))
+p <- composition(ps, rarefy=FALSE) + theme(
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_blank())
+p 
+
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/composition_nondecon_nonrar.pdf", width=3, height = 7)
+p
+dev.off()
+```
+
+### Rarefied
+
+```{r}
+ps <- (construct_phyloseq(asv_tab,taxa_tab,metadata))
+p <- composition(ps, rarefy=TRUE) + theme(
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_blank()) 
+p
+
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/composition_nondecon_rar.pdf", width=3, height = 7)
+p
+dev.off()
+```
+
+## Alpha diversity
+
+### Rarefied
+
+```{r}
+# Construct MPSE object
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_rrarefy(raresize = 10000)
+
+# Calculate alpha diversity - rarefied counts
+object_mpse %<>% mp_cal_alpha(.abundance=RareAbundance, force=TRUE)
+```
+
+```{r}
+alpha_data <- data.frame(SampleID=object_mpse$Sample.x,
+                         Pair=object_mpse$Pair,
+                        Observe=object_mpse$Observe,
+                         Shannon=object_mpse$Shannon,
+                         Simpson=object_mpse$Simpson,
+                         Pielou=object_mpse$Pielou,
+                         Platform=object_mpse$Platform)
+```
+
+
+
+```{r}
+p_alpha <- alpha_div_plot(alpha_data) + theme(
+        strip.text = element_text(size=15),
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_alpha
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/alpha_nondecon_rar.pdf", width=7, height = 6)
+p_alpha
+dev.off()
+```
+
+### Non-Rarefied
+
+```{r}
+# Construct MPSE object
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+
+# Calculate alpha diversity - rarefied counts
+object_mpse %<>% mp_cal_alpha(.abundance=Abundance, force=TRUE)
+```
+
+
+```{r}
+alpha_data <- data.frame(SampleID=object_mpse$Sample.x,
+                         Pair=object_mpse$Pair,
+                        Observe=object_mpse$Observe,
+                         Shannon=object_mpse$Shannon,
+                         Simpson=object_mpse$Simpson,
+                         Pielou=object_mpse$Pielou,
+                         Platform=object_mpse$Platform)
+
+```
+
+```{r}
+p_alpha <- alpha_div_plot(alpha_data)  + theme(
+        strip.text = element_text(size=15),
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_alpha
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/alpha_nondecon_nonrar.pdf", width=7, height = 6)
+p_alpha
+dev.off()
+```
+
+## Beta diversity
+
+### Aitchison - nonrarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_cal_dist(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+
+```{r, fig.width=5, fig.height=5, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+
+```{r, eval=TRUE}
+pdf("figures_final//custom_aitchison_nondecon_nonrar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+
+object_mpse_genus %<>% mp_cal_dist(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+```
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_aitchison_nonrar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Aitchison - rarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_rrarefy(raresize = 10000)
+object_mpse %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="aitchison",pseudocount=0.5)
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_aitchison_nondecon_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+object_mpse_genus %<>% mp_rrarefy(raresize = 10000)
+object_mpse_genus %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="aitchison",
+                                   ,pseudocount=0.5)
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="aitchison",pseudocount=0.5)
+```
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_aitchison_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Robust Aitchison - nonrarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_cal_dist(.abundance=Abundance, distmethod="robust.aitchison")
+object_mpse %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="robust.aitchison")
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "robust.aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_robustaitchison_nondecon_nonrar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+
+object_mpse_genus %<>% mp_cal_dist(.abundance=Abundance, distmethod="robust.aitchison")
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="robust.aitchison")
+```
+
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "robust.aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_robustaitchison_nonrar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Robust Aitchison - rarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_rrarefy(raresize = 10000)
+object_mpse %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="robust.aitchison")
+object_mpse %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="robust.aitchison")
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "robust.aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_robustaitchison_nondecon_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+object_mpse_genus %<>% mp_rrarefy(raresize = 10000)
+object_mpse_genus %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="robust.aitchison")
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="robust.aitchison")
+```
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "robust.aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_robustaitchison_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+
+### Rarefied - bray curtis
+
+Calculating Bray curtis distance on rarefied data, both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_rrarefy(raresize = 10000)
+object_mpse %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="bray")
+object_mpse %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="bray")
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "bray") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_bray_nondecon_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+object_mpse_genus %<>% mp_rrarefy(raresize = 10000)
+```
+
+
+
+##### Plots
+
+```{r}
+object_mpse_genus %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="bray")
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="bray")
+
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "bray")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_bray_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Normalized - bray curtis
+
+Calculating Bray curtis distance on rarefied data, both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_cal_abundance(.abundance=Abundance, force=TRUE)
+object_mpse %<>% mp_cal_dist(.abundance=RelAbundanceBySample, distmethod="bray")
+object_mpse %<>% mp_cal_pcoa(.abundance=RelAbundanceBySample, distmethod="bray")
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+
+```
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = TRUE, measure = "bray") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_bray_nondecon_norm_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+object_mpse_genus %<>% mp_cal_abundance(.abundance=Abundance, force=TRUE)
+object_mpse_genus %<>% mp_cal_dist(.abundance=RelAbundanceBySample, distmethod="bray")
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=RelAbundanceBySample, distmethod="bray")
+```
+
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = TRUE, measure = "bray")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_bray_norm_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+## Zymo reference
+
+ZYMO RESEARCH REFERENCE
+
+```{r}
+zymo_asv_table <- read.csv("zymo/asv_table.csv", sep=",")
+zymo_asv_table
+```
+
+```{r}
+zymo_taxa <- read.csv("zymo/taxa.csv", sep=",")
+zymo_taxa
+```
+
+### Nonrarefied
+
+#### Merging 
+
+```{r}
+mock_samples <- c("run06_13","run06_120","run06_158","run06_50",
+                  "CAH_13","CAH_120","CAH_158","CAH_50")
+
+mock_asv_tab <- asv_tab[,c("SeqID",mock_samples)]
+mock_data <- data_check(mock_asv_tab,taxa_tab)
+mock_asv_tab <- mock_data[[1]]
+mock_taxa_tab <- mock_data[[2]]
+```
+
+
+```{r}
+# Genus merging
+mock_zymo_genus <- mock_zymo_genus_merging(mock_asv_tab,mock_taxa_tab,zymo_asv_table, zymo_taxa)
+
+mock_zymo_metadata <- data.frame(SampleID=colnames(mock_zymo_genus)[-1])
+mock_zymo_metadata$Platform <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),"ILLUMINA","AVITI")
+mock_zymo_metadata$Sample <- mock_zymo_metadata$SampleID
+mock_zymo_metadata$Pair <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),
+                        gsub("run06_","",mock_zymo_metadata$SampleID),
+                        gsub("CAH_","",mock_zymo_metadata$SampleID))
+
+mock_zymo_metadata[1,] <- c("ZYMO REFERENCE", NA, NA, NA)
+
+# Bray Curtis distance
+
+mock_b_dist <- as.data.frame(as.matrix(vegdist(t(as.data.frame(mock_zymo_genus[,2:ncol(mock_zymo_genus)])), method="bray")))
+samples <- rownames(mock_b_dist)
+mock_b_dist <- as.data.frame(mock_b_dist[,"ZYMO REFERENCE"])
+colnames(mock_b_dist) <- "Distance"
+rownames(mock_b_dist) <- samples
+
+mock_distances <- mock_b_dist
+colnames(mock_distances) <- "Non-decontaminated, non-rarefied"
+```
+
+#### Composition 
+
+```{r}
+#colnames(mock_zymo_genus) <- c("SeqID","ZYMO REFERENCE", 
+#                               "ILLUMINA M1", "ILLUMINA M2", "ILLUMINA M3","ILLUMINA M4",
+#                               "AVITI M1", "AVITI M2", "AVITI M3","AVITI # M4")
+
+mock_zymo_genus_melted <- melt(mock_zymo_genus)
+colnames(mock_zymo_genus_melted) <- c("SeqID", "Sample", "Relative abundance")
+labels <- colSums(mock_zymo_genus[,2:ncol(mock_zymo_genus)]>0)
+p <- ggplot() + 
+    geom_bar(data=mock_zymo_genus_melted, aes(y=`Relative abundance`, x=Sample, fill=SeqID),position="fill", stat="identity") + 
+    geom_text(size=5,aes(label = labels,x = 1:9,y=rep(1.07,9))) + 
+  scale_y_continuous(limits = c(0,1.1),breaks=seq(0,1,by=0.2)) + 
+  theme_bw() +
+  theme(legend.position = "right",axis.text.x=element_blank(),
+        legend.text=element_text(size=10),
+        legend.title = element_text(size=15),  
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.ticks = element_blank())  + 
+  scale_fill_manual(values=setNames(c("#546494","#388842","#8350b6","#d62e5f","#381216","#6e94c8","#aeae43","#9d729f"),c("Pseudomonas","Escherichia-Shigella","Salmonela","Lactobacillus","Enterococcus","Staphylococcus","Listeria","Bacillus"))) + 
+  guides(fill=guide_legend(title="Genus")) + 
+  geom_vline(xintercept = 1.5, 
+               color = "red",size=1)  + 
+ geom_vline(xintercept = 5.5, 
+               color = "red", size=1) 
+
+#  scale_fill_manual(breaks=c("Pseudomonas","Escherichia-Shigella","Salmonela","Lactobacillus","Enterococcus","Staphylococcus","Listeria","Bacillus"),
+#                      values=c("#546494","#388842","#8350b6","#d62e5f","#381216","#6e94c8","#aeae43","#9d729f"))
+
+#"#ba3237","#723f23","#4f9eba","#b3dd9c","#e18dac","#ae4a37","#dbad80","#8ebcca","#e7d836","#e7928f","#dc6438","#d7c2a3","#e9e07f","#d1a9b0","#e8b14f","#309f87","#425387","#f9c675","#d55c4a"))
+p
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/mock_composition_nondecon_nonrar.pdf",width = 8,height = 5)
+p
+dev.off()
+```
+
+#### PRECISION AND RECALL
+
+```{r}
+performance_mat <- precision_recall(mock_zymo_genus)
+performance_mat
+```
+
+### Rarefied
+
+#### Merging 
+
+```{r}
+mock_samples <- c("run06_13","run06_120","run06_158","run06_50",
+                  "CAH_13","CAH_120","CAH_158","CAH_50")
+
+mock_asv_tab <- asv_tab[,c("SeqID",mock_samples)]
+mock_data <- data_check(mock_asv_tab,taxa_tab)
+mock_asv_tab <- mock_data[[1]]
+mock_taxa_tab <- mock_data[[2]]
+
+ps <- construct_phyloseq(mock_asv_tab,mock_taxa_tab, mock_zymo_metadata)
+ps <- rarefy_even_depth(ps,sample.size = 10000,rngseed = 123)
+
+mock_asv_tab <- as.data.frame(ps@otu_table) %>% rownames_to_column("SeqID") 
+mock_taxa_tab <- as.data.frame(ps@tax_table) %>% rownames_to_column("SeqID") 
+```
+
+
+```{r}
+# Genus merging
+mock_zymo_genus <- mock_zymo_genus_merging(mock_asv_tab,mock_taxa_tab,zymo_asv_table, zymo_taxa)
+
+mock_zymo_metadata <- data.frame(SampleID=colnames(mock_zymo_genus)[-1])
+mock_zymo_metadata$Platform <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),"ILLUMINA","AVITI")
+mock_zymo_metadata$Sample <- mock_zymo_metadata$SampleID
+mock_zymo_metadata$Pair <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),
+                        gsub("run06_","",mock_zymo_metadata$SampleID),
+                        gsub("CAH_","",mock_zymo_metadata$SampleID))
+
+mock_zymo_metadata[1,] <- c("ZYMO REFERENCE", NA, NA, NA)
+
+# Bray Curtis distance
+mock_b_dist <- as.data.frame(as.matrix(vegdist(t(as.data.frame(mock_zymo_genus[,2:ncol(mock_zymo_genus)])), method="bray")))
+samples <- rownames(mock_b_dist)
+mock_b_dist <- as.data.frame(mock_b_dist[,"ZYMO REFERENCE"])
+colnames(mock_b_dist) <- "Distance"
+rownames(mock_b_dist) <- samples
+
+mock_distances <- cbind(mock_distances,mock_b_dist)
+colnames(mock_distances)[2] <- "Non-decontaminated, rarefied"
+```
+
+#### Composition 
+
+```{r}
+colnames(mock_zymo_genus) <- c("SeqID","ZYMO REFERENCE", 
+                               "ILLUMINA M1", "ILLUMINA M2", "ILLUMINA M3","ILLUMINA M4",
+                               "AVITI M1", "AVITI M2", "AVITI M3","AVITI M4")
+mock_zymo_genus_melted <- melt(mock_zymo_genus)
+colnames(mock_zymo_genus_melted) <- c("SeqID", "Sample", "Relative abundance")
+labels <- colSums(mock_zymo_genus[,2:ncol(mock_zymo_genus)]>0)
+p <- ggplot() + 
+    geom_bar(data=mock_zymo_genus_melted, aes(y=`Relative abundance`, x=Sample, fill=SeqID),position="fill", stat="identity") + 
+    geom_text(size=5,aes(label = labels,x = 1:9,y=rep(1.07,9))) + 
+  scale_y_continuous(limits = c(0,1.1),breaks=seq(0,1,by=0.2)) + 
+  theme_bw() +
+  theme(legend.position = "right",axis.text.x = element_blank(),
+        legend.text=element_text(size=10),
+        legend.title = element_text(size=15),  
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.ticks = element_blank())  + 
+  scale_fill_manual(values=setNames(c("#546494","#388842","#8350b6","#d62e5f","#381216","#6e94c8","#aeae43","#9d729f"),c("Pseudomonas","Escherichia-Shigella","Salmonela","Lactobacillus","Enterococcus","Staphylococcus","Listeria","Bacillus"))) + 
+  guides(fill=guide_legend(title="Genus")) + 
+  geom_vline(xintercept = 1.5, 
+               color = "red",size=1)  + 
+ geom_vline(xintercept = 5.5, 
+               color = "red", size=1) 
+
+p
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/mock_composition_nondecon_rar.pdf",width = 8,height = 5)
+p
+dev.off()
+```
+
+
+#### PRECISION AND RECALL
+
+```{r}
+performance_mat <- precision_recall(mock_zymo_genus)
+performance_mat
+```
+
+# Decontaminated 
+
+## Data import
+
+Importing ASV, taxa and metadata tables for both ILLUMINA and AVITI datasets
+
+### ILLUMINA
+
+```{r}
+asv_tab_illumina <- as.data.frame(fread("illumina/dada_results/asv_table.csv",check.names = FALSE))
+taxa_tab_illumina <- as.data.frame(fread("illumina/dada_results/taxa_table.csv",check.names = FALSE))
+
+asv_tab_illumina <- asv_tab_illumina[c(TRUE,colSums(asv_tab_illumina[,-1])>10)]
+asv_tab_illumina <- asv_tab_illumina[(nchar(asv_tab_illumina$SeqID) > 100),]
+rownames(asv_tab_illumina) <- NULL
+```
+
+#### SCRUB
+
+```{r}
+suppressMessages(library(SCRuB))
+new_metadata <- data.frame(SampleID = colnames(asv_tab_illumina)[-1],
+                           is_control = ifelse(colnames(asv_tab_illumina)[-1] %in% c("run06_12", "run06_49", "run06_119","CAH_12", "CAH_49", "CAH_119"),TRUE, FALSE))
+new_metadata$sample_type <- ifelse(new_metadata$is_control, "negative_control","Stype")
+new_metadata <- new_metadata %>% column_to_rownames("SampleID")
+new_data <- asv_tab_illumina %>% column_to_rownames("SeqID") 
+new_data <- (t(new_data))
+
+```
+
+
+```{r}
+set.seed(123)
+scr_out <- SCRuB(new_data, new_metadata,verbose = TRUE)
+```
+
+```{r}
+asv_tab_illumina <- as.data.frame(t(scr_out$decontaminated_samples))  %>% rownames_to_column("SeqID")
+```
+
+### AVITI
+
+```{r}
+asv_tab_aviti <- as.data.frame(fread("aviti/dada_results/asv_table.csv",check.names = FALSE))
+taxa_tab_aviti <- as.data.frame(fread("aviti/dada_results/taxa_table.csv",check.names = FALSE))
+
+asv_tab_aviti <- asv_tab_aviti[c(TRUE,colSums(asv_tab_aviti[,-1])>5000)]
+asv_tab_aviti <- asv_tab_aviti[(nchar(asv_tab_aviti$SeqID) > 100),]
+```
+
+#### SCRUB
+
+```{r}
+suppressMessages(library(SCRuB))
+new_metadata <- data.frame(SampleID = colnames(asv_tab_aviti)[-1],
+                           is_control = ifelse(colnames(asv_tab_aviti)[-1] %in% c("run06_12", "run06_49", "run06_119","CAH_12", "CAH_49", "CAH_119"),TRUE, FALSE))
+new_metadata$sample_type <- ifelse(new_metadata$is_control, "negative_control","Stype")
+new_metadata <- new_metadata %>% column_to_rownames("SampleID")
+new_data <- asv_tab_aviti %>% column_to_rownames("SeqID") 
+new_data <- (t(new_data))
+
+```
+
+
+```{r}
+set.seed(123)
+scr_out <- SCRuB(new_data, new_metadata,verbose = TRUE)
+```
+
+```{r}
+asv_tab_aviti <- as.data.frame(t(scr_out$decontaminated_samples)) %>% rownames_to_column("SeqID")
+```
+
+### Merging
+
+```{r}
+asv_tab <- merge(asv_tab_illumina,asv_tab_aviti,by="SeqID",all=TRUE)
+taxa_tab <- merging_taxa_tables(taxa_tab_illumina,taxa_tab_aviti)
+data_checked <- data_check(asv_tab,taxa_tab)
+asv_tab <- data_checked[[1]]
+taxa_tab <- data_checked[[2]]
+
+colnames(taxa_tab) <- c("SeqID","Domain","Phylum","Class","Order",
+                        "Family","Genus","Species")
+```
+
+### Metadata
+
+```{r}
+metadata <- data.frame("SampleID"=colnames(asv_tab)[-1])
+metadata$Platform <- ifelse(grepl("run06_",metadata$SampleID),"ILLUMINA","AVITI")
+metadata$Sample <- metadata$SampleID
+metadata$Pair <- ifelse(grepl("run06_",metadata$SampleID),
+                        gsub("run06_","",metadata$SampleID),
+                        gsub("CAH_","",metadata$SampleID))
+
+```
+
+
+## Composition
+
+### Nonrarefied
+
+```{r}
+ps <- (construct_phyloseq(asv_tab,taxa_tab,metadata))
+p <- composition(ps, rarefy=FALSE) + theme(
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_blank())
+p
+
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/composition_decon_nonrar.pdf", width=3, height = 7)
+p
+dev.off()
+```
+
+### Rarefied
+
+```{r}
+ps <- (construct_phyloseq(asv_tab,taxa_tab,metadata))
+p <- composition(ps, rarefy=TRUE) + theme(
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_blank())
+p
+
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/composition_decon_rar.pdf", width=3, height = 7)
+p
+dev.off()
+```
+
+## Alpha diversity
+
+### Rarefied
+```{r}
+# Construct MPSE object
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_rrarefy(raresize = 10000)
+
+# Calculate alpha diversity - rarefied counts
+object_mpse %<>% mp_cal_alpha(.abundance=RareAbundance, force=TRUE)
+```
+
+
+```{r}
+alpha_data <- data.frame(SampleID=object_mpse$Sample.x,
+                         Pair=object_mpse$Pair,
+                        Observe=object_mpse$Observe,
+                         Shannon=object_mpse$Shannon,
+                         Simpson=object_mpse$Simpson,
+                         Pielou=object_mpse$Pielou,
+                         Platform=object_mpse$Platform)
+```
+
+```{r}
+p_alpha <- alpha_div_plot(alpha_data) + theme(
+        strip.text = element_text(size=15),
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_alpha
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/alpha_decon_rar.pdf", width=7, height = 6)
+p_alpha
+dev.off()
+```
+
+### Non-Rarefied
+
+```{r}
+# Construct MPSE object
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+
+# Calculate alpha diversity - rarefied counts
+object_mpse %<>% mp_cal_alpha(.abundance=Abundance, force=TRUE)
+```
+
+
+```{r}
+alpha_data <- data.frame(SampleID=object_mpse$Sample.x,
+                         Pair=object_mpse$Pair,
+                        Observe=object_mpse$Observe,
+                         Shannon=object_mpse$Shannon,
+                         Simpson=object_mpse$Simpson,
+                         Pielou=object_mpse$Pielou,
+                         Platform=object_mpse$Platform)
+
+```
+
+```{r}
+p_alpha <- alpha_div_plot(alpha_data) + theme(
+        strip.text = element_text(size=15),
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_alpha
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/alpha_decon_nonrar.pdf", width=7, height = 6)
+p_alpha
+dev.off()
+```
+
+## Beta diversity
+
+### Aitchison - nonrarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_cal_dist(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_aitchison_decon_nonrar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+
+object_mpse_genus %<>% mp_cal_dist(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+```
+
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/decontaminated/custom_aitchison_nonrar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Aitchison - rarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_rrarefy(raresize = 10000)
+object_mpse %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="aitchison",pseudocount=0.5)
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+```{r}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_aitchison_decon_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+object_mpse_genus %<>% mp_rrarefy(raresize = 10000)
+object_mpse_genus %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="aitchison",pseudocount=0.5)
+```
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/decontaminated/custom_aitchison_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Robust Aitchison - nonrarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_cal_dist(.abundance=Abundance, distmethod="robust.aitchison")
+object_mpse %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="robust.aitchison")
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "robust.aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_robustaitchison_decon_nonrar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+
+object_mpse_genus %<>% mp_cal_dist(.abundance=Abundance, distmethod="robust.aitchison")
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="robust.aitchison")
+```
+
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "robust.aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/decontaminated/custom_robustaitchison_nonrar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Robust Aitchison - rarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_rrarefy(raresize = 10000)
+object_mpse %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="robust.aitchison")
+object_mpse %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="robust.aitchison")
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "robust.aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_robustaitchison_decon_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+object_mpse_genus %<>% mp_rrarefy(raresize = 10000)
+object_mpse_genus %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="robust.aitchison")
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="robust.aitchison")
+```
+
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "robust.aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/decontaminated/custom_robustaitchison_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+
+### Rarefied - bray curtis
+
+Calculating Bray curtis distance on rarefied data, both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_rrarefy(raresize = 10000)
+object_mpse %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="bray")
+object_mpse %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="bray")
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "bray") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_bray_decon_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+object_mpse_genus %<>% mp_rrarefy(raresize = 10000)
+```
+
+
+
+##### Plots
+
+```{r}
+object_mpse_genus %<>% mp_cal_dist(.abundance=RareAbundance, distmethod="bray")
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=RareAbundance, distmethod="bray")
+
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, measure = "bray")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/decontaminated/custom_bray_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Normalized - bray curtis
+
+Calculating Bray curtis distance on rarefied data, both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_cal_abundance(.abundance=Abundance, force=TRUE)
+object_mpse %<>% mp_cal_dist(.abundance=RelAbundanceBySample, distmethod="bray")
+object_mpse %<>% mp_cal_pcoa(.abundance=RelAbundanceBySample, distmethod="bray")
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+
+```
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = TRUE, measure = "bray") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_bray_decon_norm_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+object_mpse_genus %<>% mp_cal_abundance(.abundance=Abundance, force=TRUE)
+object_mpse_genus %<>% mp_cal_dist(.abundance=RelAbundanceBySample, distmethod="bray")
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=RelAbundanceBySample, distmethod="bray")
+```
+
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = TRUE, measure = "bray")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/decontaminated/custom_bray_norm_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+## Zymo reference
+
+ZYMO RESEARCH REFERENCE
+
+```{r}
+zymo_asv_table <- read.csv("zymo/asv_table.csv", sep=",")
+zymo_asv_table
+```
+
+```{r}
+zymo_taxa <- read.csv("zymo/taxa.csv", sep=",")
+zymo_taxa
+```
+
+
+### Nonrarefied
+
+#### Merging 
+
+```{r}
+mock_asv_tab <- asv_tab[,c("SeqID", "run06_13","run06_50","run06_120","run06_158",
+                           "CAH_13","CAH_50","CAH_120","CAH_158")]
+mock_data <- data_check(mock_asv_tab, taxa_tab)
+
+mock_asv_tab <- mock_data[[1]]
+mock_taxa_tab <- mock_data[[2]]
+```
+
+
+```{r}
+# Genus merging
+mock_zymo_genus <- mock_zymo_genus_merging(mock_asv_tab,mock_taxa_tab,zymo_asv_table, zymo_taxa)
+
+mock_zymo_genus <- mock_zymo_genus[,c("SeqID","ZYMO REFERENCE", "run06_13","run06_120","run06_158","run06_50","CAH_13", "CAH_120","CAH_158","CAH_50")]
+
+mock_zymo_metadata <- data.frame(SampleID=colnames(mock_zymo_genus)[-1])
+mock_zymo_metadata$Platform <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),"ILLUMINA","AVITI")
+mock_zymo_metadata$Sample <- mock_zymo_metadata$SampleID
+mock_zymo_metadata$Pair <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),
+                        gsub("run06_","",mock_zymo_metadata$SampleID),
+                        gsub("CAH_","",mock_zymo_metadata$SampleID))
+
+mock_zymo_metadata[1,] <- c("ZYMO REFERENCE", NA, NA, NA)
+
+# Bray Curtis distance
+mock_b_dist <- as.data.frame(as.matrix(vegdist(t(as.data.frame(mock_zymo_genus[,2:ncol(mock_zymo_genus)])), method="bray")))
+samples <- rownames(mock_b_dist)
+mock_b_dist <- as.data.frame(mock_b_dist[,"ZYMO REFERENCE"])
+colnames(mock_b_dist) <- "Distance"
+rownames(mock_b_dist) <- samples
+
+mock_distances <- cbind(mock_distances,mock_b_dist)
+colnames(mock_distances)[3] <- "Decontaminated, non-rarefied"
+```
+
+#### Composition 
+
+```{r}
+colnames(mock_zymo_genus) <- c("SeqID","ZYMO REFERENCE", 
+                               "ILLUMINA M1", "ILLUMINA M2", "ILLUMINA M3","ILLUMINA M4",
+                               "AVITI M1", "AVITI M2", "AVITI M3","AVITI M4")
+mock_zymo_genus_melted <- melt(mock_zymo_genus)
+colnames(mock_zymo_genus_melted) <- c("SeqID", "Sample", "Relative abundance")
+labels <- colSums(mock_zymo_genus[,2:ncol(mock_zymo_genus)]>0)
+p <- ggplot() + 
+    geom_bar(data=mock_zymo_genus_melted, aes(y=`Relative abundance`, x=Sample, fill=SeqID),position="fill", stat="identity") + 
+    geom_text(size=5,aes(label = labels,x = 1:9,y=rep(1.07,9))) + 
+  scale_y_continuous(limits = c(0,1.1),breaks=seq(0,1,by=0.2)) + 
+  theme_bw() +
+  theme(legend.position = "right",axis.text.x = element_blank(),
+        legend.text=element_text(size=10),
+        legend.title = element_text(size=15),  
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.ticks = element_blank())  + 
+  scale_fill_manual(values=setNames(c("#546494","#388842","#8350b6","#d62e5f","#381216","#6e94c8","#aeae43","#9d729f"),c("Pseudomonas","Escherichia-Shigella","Salmonela","Lactobacillus","Enterococcus","Staphylococcus","Listeria","Bacillus"))) + 
+  guides(fill=guide_legend(title="Genus")) + 
+  geom_vline(xintercept = 1.5, 
+               color = "red",size=1)  + 
+ geom_vline(xintercept = 5.5, 
+               color = "red", size=1) 
+
+p
+```
+```{r, eval=TRUE}
+pdf("figures_final/mock_composition_decon_nonrar.pdf",width = 8,height = 5)
+p
+dev.off()
+```
+
+#### PRECISION AND RECALL
+
+```{r}
+performance_mat <- precision_recall(mock_zymo_genus)
+performance_mat
+```
+
+### Rarefied
+
+#### Merging 
+
+```{r}
+mock_asv_tab <- asv_tab[,c("SeqID", "run06_13","run06_50","run06_120","run06_158",
+                           "CAH_13","CAH_50","CAH_120","CAH_158")]
+mock_data <- data_check(mock_asv_tab, taxa_tab)
+
+mock_asv_tab <- mock_data[[1]]
+mock_taxa_tab <- mock_data[[2]]
+mock_metadata <- mock_zymo_metadata[-1,]
+
+ps <- construct_phyloseq(mock_asv_tab,mock_taxa_tab, mock_zymo_metadata)
+ps <- rarefy_even_depth(ps,sample.size = 10000)
+
+mock_asv_tab <- as.data.frame(ps@otu_table) %>% rownames_to_column("SeqID") 
+mock_taxa_tab <- as.data.frame(ps@tax_table) %>% rownames_to_column("SeqID") 
+```
+
+
+```{r}
+# Genus merging
+mock_zymo_genus <- mock_zymo_genus_merging(mock_asv_tab,mock_taxa_tab,zymo_asv_table, zymo_taxa)
+
+mock_zymo_genus <- mock_zymo_genus[,c("SeqID","ZYMO REFERENCE", "run06_13","run06_120","run06_158","run06_50","CAH_13", "CAH_120","CAH_158","CAH_50")]
+
+mock_zymo_metadata <- data.frame(SampleID=colnames(mock_zymo_genus)[-1])
+mock_zymo_metadata$Platform <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),"ILLUMINA","AVITI")
+mock_zymo_metadata$Sample <- mock_zymo_metadata$SampleID
+mock_zymo_metadata$Pair <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),
+                        gsub("run06_","",mock_zymo_metadata$SampleID),
+                        gsub("CAH_","",mock_zymo_metadata$SampleID))
+
+mock_zymo_metadata[1,] <- c("ZYMO REFERENCE", NA, NA, NA)
+
+# Bray Curtis distance
+mock_b_dist <- as.data.frame(as.matrix(vegdist(t(as.data.frame(mock_zymo_genus[,2:ncol(mock_zymo_genus)])), method="bray")))
+samples <- rownames(mock_b_dist)
+mock_b_dist <- as.data.frame(mock_b_dist[,"ZYMO REFERENCE"])
+colnames(mock_b_dist) <- "Distance"
+rownames(mock_b_dist) <- samples
+
+mock_distances <- cbind(mock_distances,mock_b_dist)
+colnames(mock_distances)[4] <- "Decontaminated, rarefied"
+```
+
+
+#### Composition 
+
+```{r}
+colnames(mock_zymo_genus) <- c("SeqID","ZYMO REFERENCE", 
+                               "ILLUMINA M1", "ILLUMINA M2", "ILLUMINA M3","ILLUMINA M4",
+                               "AVITI M1", "AVITI M2", "AVITI M3","AVITI M4")
+mock_zymo_genus_melted <- melt(mock_zymo_genus)
+colnames(mock_zymo_genus_melted) <- c("SeqID", "Sample", "Relative abundance")
+labels <- colSums(mock_zymo_genus[,2:ncol(mock_zymo_genus)]>0)
+p <- ggplot() + 
+    geom_bar(data=mock_zymo_genus_melted, aes(y=`Relative abundance`, x=Sample, fill=SeqID),position="fill", stat="identity") + 
+    geom_text(size=5,aes(label = labels,x = 1:9,y=rep(1.07,9))) + 
+  scale_y_continuous(limits = c(0,1.1),breaks=seq(0,1,by=0.2)) + 
+  theme_bw() +
+  theme(legend.position = "right",axis.text.x = element_blank(),
+        legend.text=element_text(size=10),
+        legend.title = element_text(size=15),  
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.ticks = element_blank())  + 
+  scale_fill_manual(values=setNames(c("#546494","#388842","#8350b6","#d62e5f","#381216","#6e94c8","#aeae43","#9d729f"),c("Pseudomonas","Escherichia-Shigella","Salmonela","Lactobacillus","Enterococcus","Staphylococcus","Listeria","Bacillus"))) + 
+  guides(fill=guide_legend(title="Genus")) + 
+  geom_vline(xintercept = 1.5, 
+               color = "red",size=1)  + 
+ geom_vline(xintercept = 5.5, 
+               color = "red", size=1) 
+
+p
+```
+```{r, eval=TRUE}
+pdf("figures_final/mock_composition_decon_rar.pdf",width = 8,height = 5)
+p
+dev.off()
+```
+
+#### PRECISION AND RECALL
+
+```{r}
+performance_mat <- precision_recall(mock_zymo_genus)
+performance_mat
+```
+
+# Filtered
+
+## Data import
+
+Importing ASV, taxa and metadata tables for both ILLUMINA and AVITI datasets
+
+### ILLUMINA
+
+```{r}
+asv_tab_illumina <- as.data.frame(fread("illumina/dada_results/asv_table.csv",check.names = FALSE))
+taxa_tab_illumina <- as.data.frame(fread("illumina/dada_results/taxa_table.csv",check.names = FALSE))
+
+asv_tab_illumina <- asv_tab_illumina[c(TRUE,colSums(asv_tab_illumina[,-1])>10000)]
+asv_tab_illumina <- asv_tab_illumina[(nchar(asv_tab_illumina$SeqID) > 100),]
+```
+
+
+### AVITI
+
+```{r}
+asv_tab_aviti <- as.data.frame(fread("aviti/dada_results/asv_table.csv",check.names = FALSE))
+taxa_tab_aviti <- as.data.frame(fread("aviti/dada_results/taxa_table.csv",check.names = FALSE))
+
+asv_tab_aviti <- asv_tab_aviti[c(TRUE,colSums(asv_tab_aviti[,-1])>80000)]
+asv_tab_aviti <- asv_tab_aviti[(nchar(asv_tab_aviti$SeqID) > 100),]
+```
+
+### Merging and filtering
+
+```{r}
+asv_tab <- merge(asv_tab_illumina,asv_tab_aviti,by="SeqID",all=TRUE)
+taxa_tab <- merging_taxa_tables(taxa_tab_illumina,taxa_tab_aviti)
+data_checked <- data_check(asv_tab,taxa_tab)
+asv_tab <- data_checked[[1]]
+taxa_tab <- data_checked[[2]]
+
+colnames(taxa_tab) <- c("SeqID","Domain","Phylum","Class","Order",
+                        "Family","Genus","Species")
+
+filt_data <- abundance_filtering(abundance_threshold = 0.01, asv_tab, taxa_tab)
+asv_tab_filt <- filt_data[[1]]
+taxa_tab_filt <- filt_data[[2]]
+
+```
+
+### Metadata
+
+```{r}
+metadata <- data.frame("SampleID"=colnames(asv_tab)[-1])
+metadata$Platform <- ifelse(grepl("run06_",metadata$SampleID),"ILLUMINA","AVITI")
+metadata$Sample <- metadata$SampleID
+metadata$Pair <- ifelse(grepl("run06_",metadata$SampleID),
+                        gsub("run06_","",metadata$SampleID),
+                        gsub("CAH_","",metadata$SampleID))
+
+head(metadata)
+```
+
+## Composition
+
+### Nonrarefied 
+
+```{r}
+ps <- (construct_phyloseq(asv_tab_filt,taxa_tab_filt,metadata))
+p <- composition(ps, rarefy=FALSE) + theme(
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_blank())
+p 
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/composition_filt_nonrar.pdf", width=3, height = 7)
+p
+dev.off()
+```
+
+### Rarefied
+
+```{r}
+ps <- (construct_phyloseq(asv_tab,taxa_tab,metadata))
+ps <- rarefy_even_depth(ps,sample.size = 10000)
+filt_data <- abundance_filtering(abundance_threshold = 0.01,
+                                 as.data.frame(ps@otu_table) %>% rownames_to_column("SeqID"),
+                                as.data.frame(ps@tax_table) %>% rownames_to_column("SeqID"))
+
+ps <- construct_phyloseq(filt_data[[1]],filt_data[[2]],metadata)
+
+p <- composition(ps, rarefy=FALSE) + theme(
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_blank()) 
+p
+
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/composition_filt_rar.pdf", width=3, height = 7)
+p
+dev.off()
+```
+
+
+## Beta diversity
+
+### Aitchison - nonrarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+```{r}
+object_mpse <- as.MPSE(construct_phyloseq(asv_tab,taxa_tab,metadata))
+object_mpse %<>% mp_cal_dist(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+
+# group-colored
+a_plots <- pca_plots(object_mpse,by="Platform")
+
+```
+
+
+```{r, fig.width=5, fig.height=5, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab_filt,taxa_tab_filt,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+
+```{r, eval=TRUE}
+pdf("figures_final//custom_aitchison_filt_nonrar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab_filt,taxa_tab_filt,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+object_mpse_genus <- as.MPSE(construct_phyloseq(genus_tab,genus_taxa,metadata))
+
+object_mpse_genus %<>% mp_cal_dist(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+object_mpse_genus %<>% mp_cal_pcoa(.abundance=Abundance, distmethod="aitchison",pseudocount=0.5)
+```
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, measure = "aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_aitchison_nonrar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Aitchison - rarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE,filter=TRUE, measure = "aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_aitchison_filt_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+```
+
+
+##### Plots
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE,filter=TRUE, measure = "aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_aitchison_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+
+### Robust Aitchison - nonrarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE,filter=TRUE, measure = "robust.aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_robustaitchison_filt_nonrar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+```
+
+##### Plots
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = FALSE, filter=TRUE,measure = "robust.aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_robustaitchison_nonrar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Robust Aitchison - rarefied
+
+Calculating Aitchison distance (euclidean distance on clr-transformed
+data), both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE, filter=TRUE,measure = "robust.aitchison") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_robustaitchison_filt_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+```
+
+
+##### Plots
+
+```{r}
+# group-colored
+g_plots <- pca_plots(object_mpse_genus,by="Platform")
+```
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE,filter=TRUE, measure = "robust.aitchison")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_robustaitchison_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+
+### Rarefied - bray curtis
+
+Calculating Bray curtis distance on rarefied data, both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE,filter=TRUE, measure = "bray") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_bray_filt_rar_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+```
+
+
+
+##### Plots
+
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = TRUE,normalize = FALSE,filter=TRUE, measure = "bray")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_bray_rar_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+### Normalized - bray curtis
+
+Calculating Bray curtis distance on rarefied data, both at ASV and genus level.
+
+#### ASV level
+
+##### Plots
+
+
+```{r, fig.width=4, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(asv_tab,taxa_tab,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = TRUE,filter=TRUE, measure = "bray") + theme(legend.position = "none",
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.text.x = element_text(size=10)) 
+p_beta
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/custom_bray_filt_norm_asv.pdf",width = 4,height = 4)
+p_beta
+dev.off()
+```
+
+#### Genus level
+
+Aggregation, Aitchison distance, PCoA
+
+```{r}
+genus_data <- aggregate_taxa(asv_tab,taxa_tab,taxonomic_level="Genus",names=TRUE)
+
+genus_tab <- genus_data[[1]]
+genus_taxa <- genus_data[[2]]
+
+```
+
+
+##### Plots
+
+```{r, fig.width=12, fig.height=4, fig.fullwidth=TRUE}
+ps <- construct_phyloseq(genus_tab,genus_taxa,metadata)
+p_beta <- beta_div_plot(ps,metadata,rarefy = FALSE,normalize = TRUE,filter=TRUE, measure = "bray")
+p_beta
+```
+
+```{r, eval=FALSE}
+pdf("figures/non-filtered/custom_bray_norm_genus.pdf",width = 14,height = 4)
+p_beta
+dev.off()
+```
+
+
+## Zymo reference
+
+ZYMO RESEARCH REFERENCE
+
+```{r}
+zymo_asv_table <- read.csv("zymo/asv_table.csv", sep=",")
+zymo_asv_table
+```
+
+```{r}
+zymo_taxa <- read.csv("zymo/taxa.csv", sep=",")
+zymo_taxa
+```
+
+### Nonrarefied
+
+#### Merging 
+
+```{r}
+mock_samples <- c("run06_13","run06_120","run06_158","run06_50",
+                  "CAH_13","CAH_120","CAH_158","CAH_50")
+
+mock_asv_tab <- asv_tab_filt[,c("SeqID",mock_samples)]
+mock_data <- data_check(mock_asv_tab,taxa_tab_filt)
+mock_asv_tab <- mock_data[[1]]
+mock_taxa_tab <- mock_data[[2]]
+```
+
+
+```{r}
+# Genus merging
+mock_zymo_genus <- mock_zymo_genus_merging(mock_asv_tab,mock_taxa_tab,zymo_asv_table, zymo_taxa)
+
+mock_zymo_metadata <- data.frame(SampleID=colnames(mock_zymo_genus)[-1])
+mock_zymo_metadata$Platform <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),"ILLUMINA","AVITI")
+mock_zymo_metadata$Sample <- mock_zymo_metadata$SampleID
+mock_zymo_metadata$Pair <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),
+                        gsub("run06_","",mock_zymo_metadata$SampleID),
+                        gsub("CAH_","",mock_zymo_metadata$SampleID))
+
+mock_zymo_metadata[1,] <- c("ZYMO REFERENCE", NA, NA, NA)
+
+# Bray Curtis distance
+
+mock_b_dist <- as.data.frame(as.matrix(vegdist(t(as.data.frame(mock_zymo_genus[,2:ncol(mock_zymo_genus)])), method="bray")))
+samples <- rownames(mock_b_dist)
+mock_b_dist <- as.data.frame(mock_b_dist[,"ZYMO REFERENCE"])
+colnames(mock_b_dist) <- "Distance"
+rownames(mock_b_dist) <- samples
+
+mock_distances <- cbind(mock_distances,mock_b_dist)
+colnames(mock_distances) <- "Non-decontaminated, non-rarefied"
+```
+
+#### Composition 
+
+```{r}
+#colnames(mock_zymo_genus) <- c("SeqID","ZYMO REFERENCE", 
+#                               "ILLUMINA M1", "ILLUMINA M2", "ILLUMINA M3","ILLUMINA M4",
+#                               "AVITI M1", "AVITI M2", "AVITI M3","AVITI # M4")
+
+mock_zymo_genus_melted <- melt(mock_zymo_genus)
+colnames(mock_zymo_genus_melted) <- c("SeqID", "Sample", "Relative abundance")
+labels <- colSums(mock_zymo_genus[,2:ncol(mock_zymo_genus)]>0)
+p <- ggplot() + 
+    geom_bar(data=mock_zymo_genus_melted, aes(y=`Relative abundance`, x=Sample, fill=SeqID),position="fill", stat="identity") + 
+    geom_text(size=5,aes(label = labels,x = 1:9,y=rep(1.07,9))) + 
+  scale_y_continuous(limits = c(0,1.1),breaks=seq(0,1,by=0.2)) + 
+  theme_bw() +
+  theme(legend.position = "right",axis.text.x=element_blank(),
+        legend.text=element_text(size=10),
+        legend.title = element_text(size=15),  
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.ticks = element_blank())  + 
+  scale_fill_manual(values=setNames(c("#546494","#388842","#8350b6","#d62e5f","#381216","#6e94c8","#aeae43","#9d729f"),c("Pseudomonas","Escherichia-Shigella","Salmonela","Lactobacillus","Enterococcus","Staphylococcus","Listeria","Bacillus"))) + 
+  guides(fill=guide_legend(title="Genus")) + 
+  geom_vline(xintercept = 1.5, 
+               color = "red",size=1)  + 
+ geom_vline(xintercept = 5.5, 
+               color = "red", size=1) 
+
+#  scale_fill_manual(breaks=c("Pseudomonas","Escherichia-Shigella","Salmonela","Lactobacillus","Enterococcus","Staphylococcus","Listeria","Bacillus"),
+#                      values=c("#546494","#388842","#8350b6","#d62e5f","#381216","#6e94c8","#aeae43","#9d729f"))
+
+#"#ba3237","#723f23","#4f9eba","#b3dd9c","#e18dac","#ae4a37","#dbad80","#8ebcca","#e7d836","#e7928f","#dc6438","#d7c2a3","#e9e07f","#d1a9b0","#e8b14f","#309f87","#425387","#f9c675","#d55c4a"))
+p
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/mock_composition_filt_nonrar.pdf",width = 8,height = 5)
+p
+dev.off()
+```
+
+#### PRECISION AND RECALL
+
+```{r}
+performance_mat <- precision_recall(mock_zymo_genus)
+performance_mat
+```
+
+### Rarefied
+
+#### Merging 
+
+```{r}
+mock_samples <- c("run06_13","run06_120","run06_158","run06_50",
+                  "CAH_13","CAH_120","CAH_158","CAH_50")
+
+mock_asv_tab <- asv_tab[,c("SeqID",mock_samples)]
+mock_data <- data_check(mock_asv_tab,taxa_tab)
+
+mock_asv_tab <- mock_data[[1]]
+mock_taxa_tab <- mock_data[[2]]
+
+ps <- construct_phyloseq(mock_asv_tab,mock_taxa_tab, mock_zymo_metadata)
+ps <- rarefy_even_depth(ps,sample.size = 10000,rngseed = 123)
+
+mock_asv_tab <- as.data.frame(ps@otu_table) %>% rownames_to_column("SeqID") 
+mock_taxa_tab <- as.data.frame(ps@tax_table) %>% rownames_to_column("SeqID") 
+
+mock_data <- abundance_filtering(abundance_threshold=0.01,mock_asv_tab,mock_taxa_tab)
+mock_asv_tab <- mock_data[[1]]
+mock_taxa_tab <- mock_data[[2]]
+```
+
+
+```{r}
+# Genus merging
+mock_zymo_genus <- mock_zymo_genus_merging(mock_asv_tab,mock_taxa_tab,zymo_asv_table, zymo_taxa)
+
+mock_zymo_metadata <- data.frame(SampleID=colnames(mock_zymo_genus)[-1])
+mock_zymo_metadata$Platform <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),"ILLUMINA","AVITI")
+mock_zymo_metadata$Sample <- mock_zymo_metadata$SampleID
+mock_zymo_metadata$Pair <- ifelse(grepl("run06_",mock_zymo_metadata$SampleID),
+                        gsub("run06_","",mock_zymo_metadata$SampleID),
+                        gsub("CAH_","",mock_zymo_metadata$SampleID))
+
+mock_zymo_metadata[1,] <- c("ZYMO REFERENCE", NA, NA, NA)
+
+# Bray Curtis distance
+mock_b_dist <- as.data.frame(as.matrix(vegdist(t(as.data.frame(mock_zymo_genus[,2:ncol(mock_zymo_genus)])), method="bray")))
+samples <- rownames(mock_b_dist)
+mock_b_dist <- as.data.frame(mock_b_dist[,"ZYMO REFERENCE"])
+colnames(mock_b_dist) <- "Distance"
+rownames(mock_b_dist) <- samples
+
+mock_distances <- cbind(mock_distances,mock_b_dist)
+colnames(mock_distances)[2] <- "Non-decontaminated, rarefied"
+```
+
+#### Composition 
+
+```{r}
+colnames(mock_zymo_genus) <- c("SeqID","ZYMO REFERENCE", 
+                               "ILLUMINA M1", "ILLUMINA M2", "ILLUMINA M3","ILLUMINA M4",
+                               "AVITI M1", "AVITI M2", "AVITI M3","AVITI M4")
+mock_zymo_genus_melted <- melt(mock_zymo_genus)
+colnames(mock_zymo_genus_melted) <- c("SeqID", "Sample", "Relative abundance")
+labels <- colSums(mock_zymo_genus[,2:ncol(mock_zymo_genus)]>0)
+p <- ggplot() + 
+    geom_bar(data=mock_zymo_genus_melted, aes(y=`Relative abundance`, x=Sample, fill=SeqID),position="fill", stat="identity") + 
+    geom_text(size=5,aes(label = labels,x = 1:9,y=rep(1.07,9))) + 
+  scale_y_continuous(limits = c(0,1.1),breaks=seq(0,1,by=0.2)) + 
+  theme_bw() +
+  theme(legend.position = "right",axis.text.x = element_blank(),
+        legend.text=element_text(size=10),
+        legend.title = element_text(size=15),  
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_text(size=15),
+        axis.text.y=element_text(size=10),
+        axis.ticks = element_blank())  + 
+  scale_fill_manual(values=setNames(c("#546494","#388842","#8350b6","#d62e5f","#381216","#6e94c8","#aeae43","#9d729f"),c("Pseudomonas","Escherichia-Shigella","Salmonela","Lactobacillus","Enterococcus","Staphylococcus","Listeria","Bacillus"))) + 
+  guides(fill=guide_legend(title="Genus")) + 
+  geom_vline(xintercept = 1.5, 
+               color = "red",size=1)  + 
+ geom_vline(xintercept = 5.5, 
+               color = "red", size=1) 
+
+p
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/mock_composition_filt_rar.pdf",width = 8,height = 5)
+p
+dev.off()
+```
+
+
+#### PRECISION AND RECALL
+
+```{r}
+performance_mat <- precision_recall(mock_zymo_genus)
+performance_mat
+```
+
+# Bray curtis
+
+```{r}
+colnames(mock_distances) <- c("Non-decontaminated, Non-rarefied",
+                              "Non-decontaminated, Rarefied",
+                              "Decontaminated, Non-rarefied",
+                              "Decontaminated, Rarefied",
+                              "Filtered, Non-rarefied",
+                              "Filtered, Rarefied")
+
+mock_df <- as.data.frame(mock_distances) %>% rownames_to_column("Sample")
+mock_df <- mock_df[-1,]
+mock_df <- melt(mock_df)
+
+colnames(mock_df) <- c("Sample","Dataset","Bray-Curtis")
+
+#mock_df$Sample <-  regmatches(mock_df$Sample, regexpr("run06_\\d+", mock_df$Sample))  
+
+p <- ggplot(data=mock_df,aes(x=Sample, y=`Bray-Curtis`, color=Dataset)) + 
+  geom_vline(xintercept = 1.5, 
+               color = "grey",size=1)  + 
+  geom_vline(xintercept = 2.5, 
+               color = "grey",size=1)  + 
+  geom_vline(xintercept = 3.5, 
+               color = "grey",size=1)  + 
+  geom_vline(xintercept = 4.5, 
+               color = "red",size=1) + 
+  geom_vline(xintercept = 5.5, 
+               color = "grey",size=1) + 
+  geom_vline(xintercept = 6.5, 
+               color = "grey",size=1) + 
+  geom_vline(xintercept = 7.5, 
+               color = "grey",size=1) +
+  geom_jitter(size=5) + 
+  theme_bw() + 
+  scale_x_discrete(guide = guide_axis(angle = 45)) + 
+  theme(legend.position = "right",
+        legend.text=element_text(size=10),
+        legend.title = element_text(size=15),  
+        axis.title.y = element_text(size=15), 
+        axis.title.x = element_blank(),
+        axis.text.y = element_text(size=15),
+        axis.text.x = element_text(angle=90),
+        axis.ticks = element_blank()) + scale_y_continuous(limits = c(0,1),breaks=seq(0,1,by=0.2))  + 
+  scale_color_manual(values=setNames(c("#ed7d31","#f4b183","#70ad47","#a9d18e","#0070c0","#8faadc"),c("Non-decontaminated, Non-rarefied",
+                              "Non-decontaminated, Rarefied",
+                              "Decontaminated, Non-rarefied",
+                              "Decontaminated, Rarefied",
+                              "Filtered, Non-rarefied",
+                              "Filtered, Rarefied")))
+  
+
+p
+```
+
+```{r, eval=TRUE}
+pdf("figures_final/mock_bray_curtis.pdf",width = 12,height = 5)
+p
+dev.off()
+```
